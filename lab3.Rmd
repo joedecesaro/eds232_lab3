@@ -137,8 +137,8 @@ Now, you can try and answer some questions about the planning unit data.
 3. Is there a spatial pattern in the planning unit cost values (hint: use `plot` to make a map)?
 ```
 
-1. `r nrow(pu_data)`
-2.`r max(pu_data$cost)` 
+1. 516
+2. 47.2
 3. There is a spatial patter in the planning unit cost values with the least expensive land generally in the northeast, the most expensive land generally in the north, and the middle cost land found in the middle and western parts.
 
 ## Vegetation data
@@ -339,7 +339,322 @@ Now let's investigate how well the species are represented.
 
 ```
 
+1. `r mean(repr_data$relative_held)`
+2. `r sum(repr_data$relative_held < 0.1)`
+3. `r sum(repr_data$relative_held < 0.2)`
+4. Generally I would say that there is no relationship that is highly evident.
+```{r}
+plot(abundance_data$absolute_abundance ~ repr_data$relative_held)
+```
 
+# Spatial prioritizations
+## Introduction
 
+Its worth noting that prioritizr is a decision support tool. This means that it is designed to help you make decisions---it can't make decisions for you.
 
+## Starting out simple
+
+To start things off, let's keep things simple. Let's create a prioritization using the [minimum set formulation of the reserve selection problem](https://prioritizr.net/reference/add_min_set_objective.html). This formulation means that we want a solution that will meet the targets for our biodiversity features for minimum cost. Here, we will set 5% targets for each vegetation class and use the data in the `cost` column to specify acquisition costs. Although we strongly recommend using [Gurobi](https://www.gurobi.com/) to solve problems (with [`add_gurobi_solver`](https://prioritizr.net/reference/add_gurobi_solver.html)), we will use the [lpsymphony solver](https://prioritizr.net/reference/add_lpsymphony_solver.html) in this workshop since it is easier to install. The Gurobi solver is much faster than the lpsymphony solver ([see here for installation instructions](https://prioritizr.net/articles/gurobi_installation.html)).
+
+```{r, out.width = "65%"}
+# print planning unit data
+print(pu_data)
+
+# make prioritization problem
+p1_rds <- file.path(dir_data, "p1.rds")
+if (!file.exists(p1_rds)){
+  p1 <- problem(pu_data, veg_data, cost_column = "cost") %>%
+        add_min_set_objective() %>%
+        add_relative_targets(0.05) %>% # 5% representation targets
+        add_binary_decisions() %>%
+        add_lpsymphony_solver()
+  saveRDS(p1, p1_rds)
+}
+p1 <- readRDS(p1_rds)
+
+# print problem
+print(p1)
+
+# solve problem
+s1 <- solve(p1)
+
+# print solution, the solution_1 column contains the solution values
+# indicating if a planning unit is (1) selected or (0) not
+print(s1)
+
+# calculate number of planning units selected in the prioritization
+eval_n_summary(p1, s1[, "solution_1"])
+
+# calculate total cost of the prioritization
+eval_cost_summary(p1, s1[, "solution_1"])
+
+# plot solution
+# selected = green, not selected = grey
+spplot(s1, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s1",
+       colorkey = FALSE)
+```
+
+```{block2, type="rmdquestion"}
+1. How many planing units were selected in the prioritization? What proportion of planning units were selected in the prioritization?
+2. Is there a pattern in the spatial distribution of the priority areas?
+3. Can you verify that all of the targets were met in the prioritization (hint: `eval_feature_representation_summary(p1, s1[, "solution_1"])`)?
+
+```
+
+1. 15 units and therefore 2.9% of all units
+2. There are 4 units closely distributed in the northeast/east. More than half of the prioritized units are in the eastern portion of the area.
+3. Yes, we can verify that all of the targets were met based on the code chunk below.
+
+```{r}
+s1_sum <- eval_feature_representation_summary(p1, s1[, "solution_1"])
+min_s1 <- (min(s1_sum$relative_held))
+min_s1
+```
+
+## Adding complexity
+
+Our first prioritization suffers many limitations, so let's add additional constraints to the problem to make it more useful. First, let's lock in planing units that are already by covered protected areas. If some vegetation communities are already secured inside existing protected areas, then we might not need to add as many new protected areas to the existing protected area system to meet their targets. Since our planning unit data (`pu_da`) already contains this information in the `locked_in` column, we can use this column name to specify which planning units should be locked in.
+
+```{r, out.width = "65%"}
+# plot locked_in data
+# TRUE = blue, FALSE = grey
+spplot(pu_data, "locked_in", col.regions = c("grey80", "darkblue"),
+       main = "locked_in", colorkey = FALSE)
+```
+
+```{r, out.width = "65%"}
+# make prioritization problem
+p2_rds <- file.path(dir_data, "p2.rds")
+if (!file.exists(p2_rds)){
+  p2 <- problem(pu_data, veg_data, cost_column = "cost") %>%
+      add_min_set_objective() %>%
+      add_relative_targets(0.05) %>%
+      add_locked_in_constraints("locked_in") %>%
+      add_binary_decisions() %>%
+      add_lpsymphony_solver()
+  saveRDS(p2, p2_rds)
+}
+p2 <- readRDS(p2_rds)
+
+# print problem
+print(p2)
+
+# solve problem
+s2 <- solve(p2)
+
+# plot solution
+# selected = green, not selected = grey
+spplot(s2, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s2",
+       colorkey = FALSE)
+```
+
+Let's pretend that we talked to an expert on the vegetation communities in our study system and they recommended that a 10% target was needed for each vegetation class. So, equipped with this information, let's set the targets to 10%.
+
+```{r, out.width = "65%"}
+# make prioritization problem
+p3_rds <- file.path(dir_data, "p3.rds")
+if (!file.exists(p3_rds)){
+  p3 <- problem(pu_data, veg_data, cost_column = "cost") %>%
+    add_min_set_objective() %>%
+    add_relative_targets(0.1) %>%
+    add_locked_in_constraints("locked_in") %>%
+    add_binary_decisions() %>%
+    add_lpsymphony_solver()
+  saveRDS(p3, p3_rds)
+}
+p3 <- readRDS(p3_rds)
+
+# print problem
+print(p3)
+
+# solve problem
+s3 <- solve(p3)
+
+# plot solution
+# selected = green, not selected = grey
+spplot(s3, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s3",
+       colorkey = FALSE)
+```
+
+Next, let's lock out highly degraded areas. Similar to before, this information is present in our planning unit data so we can use the `locked_out` column name to achieve this.
+
+```{r, out.width = "65%"}
+# plot locked_out data
+# TRUE = red, FALSE = grey
+spplot(pu_data, "locked_out", col.regions = c("grey80", "darkred"),
+       main = "locked_out", colorkey = FALSE)
+
+# make prioritization problem
+p4_rds <- file.path(dir_data, "p4.rds")
+if (!file.exists(p4_rds)){
+  p4 <- problem(pu_data, veg_data, cost_column = "cost") %>%
+    add_min_set_objective() %>%
+    add_relative_targets(0.1) %>%
+    add_locked_in_constraints("locked_in") %>%
+    add_locked_out_constraints("locked_out") %>%
+    add_binary_decisions() %>%
+    add_lpsymphony_solver()
+  saveRDS(p4, p4_rds)
+}
+p4 <- readRDS(p4_rds)
+```
+
+```{r, out.width = "65%"}
+# print problem
+print(p4)
+
+# solve problem
+s4 <- solve(p4)
+
+# plot solution
+# selected = green, not selected = grey
+spplot(s4, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s4",
+       colorkey = FALSE)
+```
+
+Now, let's compare the solutions.
+
+```{block2, type="rmdquestion"}
+1. What is the cost of the planning units selected in `s2`, `s3`, and `s4`?
+2. How many planning units are in `s2`, `s3`, and `s4`?
+3. Do the solutions with more planning units have a greater cost? Why (or why not)?
+4. Why does the first solution (`s1`) cost less than the second solution with protected areas locked into the solution (`s2`)?
+5. Why does the third solution (`s3`) cost less than the fourth solution solution with highly degraded areas locked out (`s4`)?
+```
+
+1. 
+```{r}
+eval_cost_summary(p2, s2[, "solution_1"])$cost
+eval_cost_summary(p3, s3[, "solution_1"])$cost
+eval_cost_summary(p4, s4[, "solution_1"])$cost
+```
+
+2.
+```{r}
+eval_n_summary(p2, s2[, "solution_1"])$cost
+eval_n_summary(p3, s3[, "solution_1"])$cost
+eval_n_summary(p4, s4[, "solution_1"])$cost
+```
+
+3. The solutions with more planning units do have a greater cost, because you need to buy more units to meet the larger targets and by excluding the cheap "locked out" land you need to buy a few more units.
+
+4. Some of the land to reach the goals of s1 are located in the "locked-in" land and this land can't be purchased in s2. To reach the same target more expensive land is likely required.
+
+5. By excluding the cheaper degraded areas you need to buy a few more units to reach the 10% target.
+
+## Penalizing fragmentation
+
+Plans for protected area systems should promote connectivity. However, the prioritizations we have made so far have been highly fragmented. To address this issue, we can add penalties to our conservation planning problem to penalize fragmentation. These penalties work by specifying a trade-off between the primary objective (here, solution cost) and fragmentation  (i.e. total exposed boundary length) using a penalty value. If we set the penalty value too low, then we will end up with a solution that is nearly identical to the previous solution. If we set the penalty value too high, then prioritizr will (1) take a long time to solve the problem and (2) we will end up with a solution that contains lots of extra planning units that are not needed. This is because the minimizing fragmentation is considered so much more important than solution cost that the optimal solution is simply to select as many planning units as possible.
+
+As a rule of thumb, we generally want penalty values between 0.00001 and 0.01. However, finding a useful penalty value requires calibration. The "correct" penalty value depends on the size of the planning units, the main objective values (e.g. cost values), and the effect of fragmentation on biodiversity persistence. Let's create a new problem that is similar to our previous problem (`p4`)---except that it contains boundary length penalties---and solve it. Since our planning unit data is in a spatial format (i.e. vector or raster data), prioritizr can automatically calculate the boundary data for us.
+
+```{r, out.width = "65%"}
+# make prioritization problem
+p5_rds <- file.path(dir_data, "p5.rds")
+if (!file.exists(p5_rds)){
+  p5 <- problem(pu_data, veg_data, cost_column = "cost") %>%
+    add_min_set_objective() %>%
+    add_boundary_penalties(penalty = 0.001) %>%
+    add_relative_targets(0.1) %>%
+    add_locked_in_constraints("locked_in") %>%
+    add_locked_out_constraints("locked_out") %>%
+    add_binary_decisions() %>%
+    add_lpsymphony_solver()
+  saveRDS(p5, p5_rds)
+}
+p5 <- readRDS(p5_rds)
+
+# print problem
+print(p5)
+
+# solve problem,
+# note this will take a bit longer than the previous runs
+s5 <- solve(p5)
+
+# print solution
+print(s5)
+
+# plot solution
+# selected = green, not selected = grey
+spplot(s5, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s5",
+       colorkey = FALSE)
+```
+
+Now let's compare the solutions to the problems with (`s5`) and without (`s4`) the boundary length penalties.
+
+```{block2, type="rmdquestion"}
+1. What is the cost the fourth (`s4`) and fifth (`s5`) solutions? Why does the fifth solution (`s5`) cost more than the fourth (`s4`) solution?
+2. Try setting the penalty value to 0.000000001 (i.e. `1e-9`) instead of 0.001. What is the cost of the solution now? Is it different from the fourth solution (`s4`) (hint: try plotting the solutions to visualize them)? Is this is a useful penalty value? Why (or why not)?
+3. Try setting the penalty value to 0.5. What is the cost of the solution now? Is it different from the fourth solution (`s4`) (hint: try plotting the solutions to visualize them)? Is this a useful penalty value? Why (or why not)?
+```
+
+1. See costs below. s5 likely costs more than s4 because some the land that has been grouped together is more expensive than the disjointed land proposed in s4.
+```{r}
+eval_cost_summary(p4, s4[, "solution_1"])$cost
+eval_cost_summary(p5, s5[, "solution_1"])$cost
+```
+
+2. This penalty makes the costs of the solutions roughly the same and their maps are mostly similar with a few minor differences because the boundary penalty is so low so it makes sense that they have relatively the same costs. See code below for visualization and cost of s6.
+```{r, out.width = "65%"}
+# make prioritization problem
+p6_rds <- file.path(dir_data, "p6.rds")
+if (!file.exists(p6_rds)){
+  p6 <- problem(pu_data, veg_data, cost_column = "cost") %>%
+    add_min_set_objective() %>%
+    add_boundary_penalties(penalty = 0.000000001) %>%
+    add_relative_targets(0.1) %>%
+    add_locked_in_constraints("locked_in") %>%
+    add_locked_out_constraints("locked_out") %>%
+    add_binary_decisions() %>%
+    add_lpsymphony_solver()
+  saveRDS(p6, p6_rds)
+}
+p6 <- readRDS(p6_rds)
+
+# solve problem,
+# note this will take a bit longer than the previous runs
+s6 <- solve(p6)
+
+# plot solution
+# selected = green, not selected = grey
+spplot(s6, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s6",
+       colorkey = FALSE)
+spplot(s4, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s4",
+       colorkey = FALSE)
+
+eval_cost_summary(p6, s6[, "solution_1"])$cost
+
+```
+
+3. This solution is much more expensive because the large penalty on boundary length requires everything to be mostly under one large area as seen in the map below. This large area is likely driving up the costs.
+```{r}
+# make prioritization problem
+p7_rds <- file.path(dir_data, "p7.rds")
+if (!file.exists(p7_rds)){
+  p7 <- problem(pu_data, veg_data, cost_column = "cost") %>%
+    add_min_set_objective() %>%
+    add_boundary_penalties(penalty = 0.5) %>%
+    add_relative_targets(0.1) %>%
+    add_locked_in_constraints("locked_in") %>%
+    add_locked_out_constraints("locked_out") %>%
+    add_binary_decisions() %>%
+    add_lpsymphony_solver()
+  saveRDS(p7, p7_rds)
+}
+p7 <- readRDS(p7_rds)
+
+# solve problem,
+# note this will take a bit longer than the previous runs
+s7 <- solve(p7)
+
+# plot solution
+# selected = green, not selected = grey
+spplot(s7, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s7",
+       colorkey = FALSE)
+spplot(s4, "solution_1", col.regions = c("grey80", "darkgreen"), main = "s4",
+       colorkey = FALSE)
+
+eval_cost_summary(p7, s7[, "solution_1"])$cost
+```
+```
 
